@@ -14,7 +14,7 @@ import (
 	"github.com/sourcegraph/src-cli/internal/batches/graphql"
 )
 
-const progressPrinterDiff = `diff --git README.md README.md
+var progressPrinterDiff = []byte(`diff --git README.md README.md
 new file mode 100644
 index 0000000..3363c39
 --- /dev/null
@@ -37,7 +37,7 @@ index 627c2ae..88f1836 100644
 @@ -1 +1 @@
 -this is x
 +this is x (or is it?)
-`
+`)
 
 func TestTaskExecTUI_Integration(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -50,8 +50,9 @@ func TestTaskExecTUI_Integration(t *testing.T) {
 
 	buf := &ttyBuf{}
 
+	true_ := true
 	out := output.NewOutput(buf, output.OutputOpts{
-		ForceTTY:    true,
+		ForceTTY:    &true_,
 		ForceColor:  true,
 		ForceHeight: 25,
 		ForceWidth:  80,
@@ -153,6 +154,7 @@ func TestTaskExecTUI_Integration(t *testing.T) {
 			Body:           "This is my batch change",
 			Commits: []batcheslib.GitCommitDescription{
 				{
+					Version: 2,
 					Message: "This is my batch change",
 					Diff:    progressPrinterDiff,
 				},
@@ -208,8 +210,9 @@ func TestProgressUpdateAfterComplete(t *testing.T) {
 	now := time.Now()
 	clock := func() time.Time { return now.UTC().Truncate(time.Millisecond) }
 
+	true_ := true
 	out := output.NewOutput(buf, output.OutputOpts{
-		ForceTTY:    true,
+		ForceTTY:    &true_,
 		ForceColor:  true,
 		ForceHeight: 25,
 		ForceWidth:  80,

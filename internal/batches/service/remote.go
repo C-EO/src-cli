@@ -185,6 +185,8 @@ func (svc *Service) uploadFile(ctx context.Context, workingDir, filePath, batchS
 		// Errors passed to pipeWriter.CloseWithError come through here.
 		return err
 	}
+	defer resp.Body.Close()
+
 	// 2xx and 3xx are ok
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusBadRequest {
 		p, err := io.ReadAll(resp.Body)
@@ -211,7 +213,7 @@ func createFormFile(w *multipart.Writer, workingDir string, mountPath string) er
 		return err
 	}
 	if fileStat.Size() > maxFileSize {
-		return errors.New("file exceeds limit of 10MB")
+		return errors.Newf("file %q exceeds limit of 10MB", mountPath)
 	}
 
 	filePath, fileName := filepath.Split(mountPath)

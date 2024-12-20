@@ -2,7 +2,6 @@ package instancehealth
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/sourcegraph/sourcegraph/lib/errors"
@@ -30,11 +29,6 @@ func NewChecks(
 			b := out.Block(output.Styled(output.StyleBold, "Site configuration"))
 			defer b.Close()
 			return checkSiteConfiguration(b, instanceHealth)
-		},
-		func(out *output.Output) error {
-			b := out.Block(output.Styled(output.StyleBold, "Monitoring alerts"))
-			defer b.Close()
-			return checkMonitoringAlerts(b, since, instanceHealth)
 		},
 		func(out *output.Output) error {
 			b := out.Block(output.Styled(output.StyleBold, "External services"))
@@ -83,33 +77,6 @@ func checkSiteConfiguration(
 	}
 	// never error, just issue printed warning, since the application should still work
 	// even with validation messages
-	return nil
-}
-
-// checkMonitoringAlerts indicates if there are any alerts issued by monitoring infra
-func checkMonitoringAlerts(
-	out output.Writer,
-	since time.Duration,
-	instanceHealth Indicators,
-) error {
-	var criticalAlerts int
-	for _, a := range instanceHealth.Site.MonitoringStatistics.Alerts {
-		if a.Average == 0 || !strings.Contains(strings.ToLower(a.Name), "critical") {
-			continue
-		}
-		// average is ratio of 12h windows that alert was active, so we set the threshold
-		// if it's possible this alert could have been active in this 'since' window.
-		if a.Average*0.5 >= since.Hours()/12 {
-			criticalAlerts += 1
-			out.WriteLine(output.Linef(output.EmojiWarning, output.StyleWarning,
-				"Found recently active alert: %q", a.Name))
-		}
-	}
-	if criticalAlerts == 0 {
-		out.WriteLine(output.Emoji(output.EmojiSuccess, "No critical monitoring alerts!"))
-	}
-	// never error, just issue printed warning, since critical alerts aren't all _that_
-	// reliable today, though they provide a potentially useful signal.
 	return nil
 }
 
@@ -168,15 +135,15 @@ func checkPermissionsSyncing(
 	var syncErrors []string
 	var seenProviders = make(map[string]map[string]string) // provider : state : message
 	for _, sync := range instanceHealth.PermissionsSyncJobs.Nodes {
-		if sync.CompletedAt.Before(time.Now().Add(-since)) {
+		if sync.FinishedAt.Before(time.Now().Add(-since)) {
 			continue
 		}
 		syncCount += 1
-		if sync.Status == "ERROR" {
-			syncErrors = append(syncErrors, sync.Message)
+		if sync.State == "ERROR" || sync.State == "FAILED" {
+			syncErrors = append(syncErrors, sync.FailureMessage)
 		}
-		for _, p := range sync.Providers {
-			key := fmt.Sprintf("%s - %s", p.Type, p.ID)
+		for _, p := range sync.CodeHostStates {
+			key := fmt.Sprintf("%s - %s", p.ProviderType, p.ProviderID)
 			if _, ok := seenProviders[key]; !ok {
 				seenProviders[key] = make(map[string]string)
 			}

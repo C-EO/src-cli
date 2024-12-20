@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"os/exec"
 	pathpkg "path"
 	"path/filepath"
@@ -106,6 +106,9 @@ func (s *Serve) handler() http.Handler {
 		Dir: func(name string) string {
 			return filepath.Join(s.Root, filepath.FromSlash(name))
 		},
+		ErrorHook: func(err error, stderr string) {
+			s.Info.Printf("git-service error: %s\nstderr:\n%s", err.Error(), stderr)
+		},
 		Trace: func(ctx context.Context, svc, repo, protocol string) func(error) {
 			start := time.Now()
 			return func(err error) {
@@ -170,7 +173,7 @@ func (s *Serve) Repos() ([]Repo, error) {
 		return nil, nil
 	}
 
-	err = filepath.Walk(root, func(path string, fi os.FileInfo, fileErr error) error {
+	err = filepath.WalkDir(root, func(path string, fi fs.DirEntry, fileErr error) error {
 		if fileErr != nil {
 			s.Info.Printf("WARN: ignoring error searching %s: %v", path, fileErr)
 			return nil
@@ -250,7 +253,7 @@ func (s *Serve) Repos() ([]Repo, error) {
 func explainAddr(addr string) string {
 	return fmt.Sprintf(`Serving the repositories at http://%s.
 
-See https://docs.sourcegraph.com/admin/external_service/src_serve_git for
+See https://sourcegraph.com/docs/admin/code_hosts/src_serve_git for
 instructions to configure in Sourcegraph.
 `, addr)
 }

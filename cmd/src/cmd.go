@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/sourcegraph/sourcegraph/lib/errors"
@@ -23,8 +24,8 @@ type command struct {
 	// handler is the function that is invoked to handle this command.
 	handler func(args []string) error
 
-	// flagSet.Usage function to invoke on e.g. -h flag. If nil, a default one
-	// one is used.
+	// flagSet.Usage function to invoke on e.g. -h flag. If nil, a default one is
+	// used.
 	usageFunc func()
 }
 
@@ -48,7 +49,7 @@ type commander []*command
 func (c commander) run(flagSet *flag.FlagSet, cmdName, usageText string, args []string) {
 	// Parse flags.
 	flagSet.Usage = func() {
-		fmt.Fprint(flag.CommandLine.Output(), usageText)
+		_, _ = fmt.Fprint(flag.CommandLine.Output(), usageText)
 	}
 	if !flagSet.Parsed() {
 		_ = flagSet.Parse(args)
@@ -56,6 +57,7 @@ func (c commander) run(flagSet *flag.FlagSet, cmdName, usageText string, args []
 
 	// Print usage if the command is "help".
 	if flagSet.Arg(0) == "help" || flagSet.NArg() == 0 {
+		flagSet.SetOutput(os.Stdout)
 		flagSet.Usage()
 		os.Exit(0)
 	}
@@ -68,7 +70,7 @@ func (c commander) run(flagSet *flag.FlagSet, cmdName, usageText string, args []
 			continue
 		}
 		cmd.flagSet.Usage = func() {
-			fmt.Fprintf(flag.CommandLine.Output(), "Usage of '%s %s':\n", cmdName, cmd.flagSet.Name())
+			_, _ = fmt.Fprintf(flag.CommandLine.Output(), "Usage of '%s %s':\n", cmdName, cmd.flagSet.Name())
 			cmd.flagSet.PrintDefaults()
 		}
 	}
@@ -87,9 +89,20 @@ func (c commander) run(flagSet *flag.FlagSet, cmdName, usageText string, args []
 			log.Fatal("reading config: ", err)
 		}
 
+		// Print help to stdout if requested
+		if slices.IndexFunc(args, func(s string) bool {
+			return s == "--help"
+		}) >= 0 {
+			cmd.flagSet.SetOutput(os.Stdout)
+			flag.CommandLine.SetOutput(os.Stdout)
+			cmd.flagSet.Usage()
+			os.Exit(0)
+		}
+
 		// Parse subcommand flags.
 		args := flagSet.Args()[1:]
 		if err := cmd.flagSet.Parse(args); err != nil {
+			fmt.Printf("Error parsing subcommand flags: %s\n", err)
 			panic(fmt.Sprintf("all registered commands should use flag.ExitOnError: error: %s", err))
 		}
 
@@ -97,6 +110,8 @@ func (c commander) run(flagSet *flag.FlagSet, cmdName, usageText string, args []
 		if err := cmd.handler(flagSet.Args()[1:]); err != nil {
 			if _, ok := err.(*cmderrors.UsageError); ok {
 				log.Printf("error: %s\n\n", err)
+				cmd.flagSet.SetOutput(os.Stderr)
+				flag.CommandLine.SetOutput(os.Stderr)
 				cmd.flagSet.Usage()
 				os.Exit(2)
 			}

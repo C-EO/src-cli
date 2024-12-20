@@ -7,7 +7,7 @@
   "license": "Apache-2.0",
   "scripts": {
     "install": "node install.js",
-    "prepack": "cp ../LICENSE ."
+    "prepack": "node copy-files.js"
   },
   "main": "src.js",
   "bin": {
@@ -17,10 +17,10 @@
     "sourcegraph"
   ],
   "dependencies": {
-    "tar": "^6.1.11"
+    "tar": "^7.1.0"
   },
   "devDependencies": {
-    "@types/tar": "6.1.3"
+    "@types/tar": "6.1.13"
   },
   "private": false
 }

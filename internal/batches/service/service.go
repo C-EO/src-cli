@@ -43,10 +43,11 @@ func New(opts *Opts) *Service {
 // The reason we ask for batchChanges here is to surface errors about trying to use batch
 // changes in an unsupported environment sooner, since the version check is typically the
 // first thing we do.
-const sourcegraphVersionQuery = `query SourcegraphVersion {
+const getInstanceInfo = `query InstanceInfo {
 	site {
 		productVersion
 	}
+	maxUnlicensedChangesets
 	batchChanges(first: 1) {
 		nodes {
 			id
@@ -55,32 +56,39 @@ const sourcegraphVersionQuery = `query SourcegraphVersion {
 }
 `
 
-// getSourcegraphVersion queries the Sourcegraph GraphQL API to get the
-// current version of the Sourcegraph instance.
-func (svc *Service) getSourcegraphVersion(ctx context.Context) (string, error) {
+// getSourcegraphVersionAndMaxChangesetsCount queries the Sourcegraph GraphQL API to get the
+// current version and max unlicensed changesets count for the Sourcegraph instance.
+func (svc *Service) getSourcegraphVersionAndMaxChangesetsCount(ctx context.Context) (string, int, error) {
 	var result struct {
-		Site struct {
+		MaxUnlicensedChangesets int
+		Site                    struct {
 			ProductVersion string
 		}
 	}
 
-	ok, err := svc.client.NewQuery(sourcegraphVersionQuery).Do(ctx, &result)
+	ok, err := svc.client.NewQuery(getInstanceInfo).Do(ctx, &result)
 	if err != nil || !ok {
-		return "", err
+		return "", 0, err
 	}
 
-	return result.Site.ProductVersion, err
+	return result.Site.ProductVersion, result.MaxUnlicensedChangesets, err
 }
 
-// DetermineFeatureFlags fetches the version of the configured Sourcegraph and
-// returns the enabled features.
-func (svc *Service) DetermineFeatureFlags(ctx context.Context) (*batches.FeatureFlags, error) {
-	version, err := svc.getSourcegraphVersion(ctx)
+// DetermineLicenseAndFeatureFlags returns the enabled features and license restrictions
+// configured for the Sourcegraph instance.
+func (svc *Service) DetermineLicenseAndFeatureFlags(ctx context.Context, skipErrors bool) (*batches.LicenseRestrictions, *batches.FeatureFlags, error) {
+	version, mc, err := svc.getSourcegraphVersionAndMaxChangesetsCount(ctx)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to query Sourcegraph version to check for available features")
+		return nil, nil, errors.Wrap(err, "failed to query Sourcegraph version and license info for instance")
 	}
+
+	lr := &batches.LicenseRestrictions{
+		MaxUnlicensedChangesets: mc,
+	}
+
 	ffs := &batches.FeatureFlags{}
-	return ffs, ffs.SetFromVersion(version)
+	return lr, ffs, ffs.SetFromVersion(version, skipErrors)
+
 }
 
 const applyBatchChangeMutation = `
@@ -498,7 +506,8 @@ func validateMount(batchSpecDir string, spec *batcheslib.BatchSpec) error {
 	return nil
 }
 
-const exampleSpecTmpl = `name: NAME-OF-YOUR-BATCH-CHANGE
+const exampleSpecTmpl = `version: 2 # Use the latest schema version
+name: NAME-OF-YOUR-BATCH-CHANGE
 description: DESCRIPTION-OF-YOUR-BATCH-CHANGE
 
 # "on" specifies on which repositories to execute the "steps".

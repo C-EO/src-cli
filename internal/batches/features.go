@@ -1,18 +1,21 @@
 package batches
 
 import (
-	"github.com/sourcegraph/sourcegraph/lib/errors"
+	"fmt"
+	"log"
 
-	"github.com/sourcegraph/src-cli/internal/api"
+	"github.com/sourcegraph/sourcegraph/lib/api"
+	"github.com/sourcegraph/sourcegraph/lib/errors"
 )
 
 // FeatureFlags represent features that are only available on certain
 // Sourcegraph versions and we therefore have to detect at runtime.
 type FeatureFlags struct {
 	Sourcegraph40 bool
+	BinaryDiffs   bool
 }
 
-func (ff *FeatureFlags) SetFromVersion(version string) error {
+func (ff *FeatureFlags) SetFromVersion(version string, skipErrors bool) error {
 	for _, feature := range []struct {
 		flag       *bool
 		constraint string
@@ -28,10 +31,15 @@ func (ff *FeatureFlags) SetFromVersion(version string) error {
 		// Example usage:
 		// {&ff.FlagName, ">= 3.23.0-0", "2020-11-24"},
 		{&ff.Sourcegraph40, ">= 4.0.0-0", "2022-08-24"},
+		{&ff.BinaryDiffs, ">= 4.3.0-0", "2022-11-29"},
 	} {
 		value, err := api.CheckSourcegraphVersion(version, feature.constraint, feature.minDate)
 		if err != nil {
-			return errors.Wrap(err, "failed to check version returned by Sourcegraph")
+			if skipErrors {
+				log.Printf("failed to check version returned by Sourcegraph: %s. Assuming no feature flags.", version)
+			} else {
+				return errors.Wrap(err, fmt.Sprintf("failed to check version returned by Sourcegraph: %s", version))
+			}
 		}
 		*feature.flag = value
 	}

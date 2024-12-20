@@ -41,22 +41,22 @@ type Indicators struct {
 		}
 	}
 	PermissionsSyncJobs struct {
-		Nodes []permissionsSyncJob
+		Nodes []permissionSyncJob
 	}
 }
 
-type permissionsSyncJob struct {
-	Status      string
-	Message     string
-	CompletedAt time.Time
-	Providers   []permissionsProviderStatus
+type permissionSyncJob struct {
+	State          string
+	FailureMessage string
+	FinishedAt     time.Time
+	CodeHostStates []permissionsProviderStatus
 }
 
 type permissionsProviderStatus struct {
-	Type    string
-	ID      string
-	Status  string
-	Message string
+	ProviderType string
+	ProviderID   string
+	Status       string
+	Message      string
 }
 
 // GetIndicators retrieves summary data from a Sourcegraph instance's GraphQL API for
@@ -97,12 +97,12 @@ func GetIndicators(ctx context.Context, client api.Client) (*Indicators, error) 
 
 			permissionsSyncJobs(first:500) {
 				nodes {
-					status
-					completedAt
-					message
-					providers {
-						type
-						id
+					state
+					finishedAt
+					failureMessage
+					codeHostStates {
+						providerType
+						providerID
 						status
 						message
 					}

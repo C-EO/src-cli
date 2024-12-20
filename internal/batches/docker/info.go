@@ -3,11 +3,11 @@ package docker
 import (
 	"bytes"
 	"context"
-	"strconv"
-
-	"github.com/sourcegraph/sourcegraph/lib/errors"
+	"encoding/json"
 
 	"github.com/sourcegraph/src-cli/internal/exec"
+
+	"github.com/sourcegraph/sourcegraph/lib/errors"
 )
 
 // CurrentContext returns the name of the current Docker context (not to be
@@ -35,6 +35,13 @@ func CurrentContext(ctx context.Context) (string, error) {
 	return name, nil
 }
 
+type Info struct {
+	Host struct {
+		CPUs int `json:"cpus"`
+	} `json:"host"` // Podman engine
+	NCPU int `json:"NCPU"` // Docker Engine
+}
+
 // NCPU returns the number of CPU cores available to Docker.
 func NCPU(ctx context.Context) (int, error) {
 	dctx, cancel, err := withFastCommandContext(ctx)
@@ -43,7 +50,7 @@ func NCPU(ctx context.Context) (int, error) {
 	}
 	defer cancel()
 
-	args := []string{"info", "--format", "{{ .NCPU }}"}
+	args := []string{"info", "--format", "{{ json .}}"}
 	out, err := exec.CommandContext(dctx, "docker", args...).CombinedOutput()
 	if errors.IsDeadlineExceeded(err) || errors.IsDeadlineExceeded(dctx.Err()) {
 		return 0, newFastCommandTimeoutError(dctx, args...)
@@ -51,10 +58,12 @@ func NCPU(ctx context.Context) (int, error) {
 		return 0, err
 	}
 
-	dcpu, err := strconv.Atoi(string(bytes.TrimSpace(out)))
-	if err != nil {
-		return 0, errors.Wrap(err, "parsing docker cpu count")
+	var info Info
+	if err := json.Unmarshal(out, &info); err != nil {
+		return 0, err
 	}
-
-	return dcpu, nil
+	if info.NCPU > 0 {
+		return info.NCPU, nil
+	}
+	return info.Host.CPUs, nil
 }

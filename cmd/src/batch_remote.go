@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	cliLog "log"
 	"strings"
 	"time"
 
@@ -52,8 +53,17 @@ Examples:
 			Client: cfg.apiClient(flags.api, flagSet.Output()),
 		})
 
-		if err := validateSourcegraphVersionConstraint(ctx, svc); err != nil {
+		_, ffs, err := svc.DetermineLicenseAndFeatureFlags(ctx, flags.skipErrors)
+		if err != nil {
 			return err
+		}
+
+		if err := validateSourcegraphVersionConstraint(ffs); err != nil {
+			if !flags.skipErrors {
+				return err
+			} else {
+				cliLog.Printf("WARNING: %s", err)
+			}
 		}
 
 		out := output.NewOutput(flagSet.Output(), output.OutputOpts{Verbose: *verbose})

@@ -10,7 +10,7 @@ before:
   hooks:
     - go mod download
     - go mod tidy
-    - go generate ./schema
+    - go generate ./...
 builds:
 -
   main: ./cmd/src/
@@ -36,12 +36,12 @@ brews:
     name: src-cli
     homepage: "https://sourcegraph.com/"
     description: "Sourcegraph CLI"
-    tap:
+    repository:
       owner: sourcegraph
       name: homebrew-src-cli
     # Folder inside the repository to put the formula.
     # Default is the root folder.
-    folder: Formula
+    directory: Formula
     # We need to set this so that goreleaser doesn't think the binary is called
     # `src-cli`
     install: |

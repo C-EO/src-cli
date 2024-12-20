@@ -23,7 +23,9 @@ import (
 
 var _ ExecUI = &JSONLines{}
 
-type JSONLines struct{}
+type JSONLines struct {
+	BinaryDiffs bool
+}
 
 func (ui *JSONLines) ParsingBatchSpec() {
 	logOperationStart(batcheslib.LogEventOperationParsingBatchSpec, &batcheslib.ParsingBatchSpecMetadata{})
@@ -89,7 +91,9 @@ func (ui *JSONLines) CheckingCacheSuccess(cachedSpecsFound int, tasksToExecute i
 }
 
 func (ui *JSONLines) ExecutingTasks(_ bool, _ int) executor.TaskExecutionUI {
-	return &taskExecutionJSONLines{}
+	return &taskExecutionJSONLines{
+		binaryDiffs: ui.BinaryDiffs,
+	}
 }
 
 func (ui *JSONLines) ExecutingTasksSkippingErrors(err error) {
@@ -145,7 +149,7 @@ func (ui *JSONLines) CreatingBatchSpecSuccess(batchSpecURL string) {
 	})
 }
 
-func (ui *JSONLines) CreatingBatchSpecError(err error) error {
+func (ui *JSONLines) CreatingBatchSpecError(_ int, err error) error {
 	logOperationFailure(batcheslib.LogEventOperationCreatingBatchSpec, &batcheslib.CreatingBatchSpecMetadata{})
 	return err
 }
@@ -173,8 +177,17 @@ func (ui *JSONLines) WriteAfterStepResult(key string, value execution.AfterStepR
 	})
 }
 
+func (ui *JSONLines) DockerWatchDogWarning(err error) {
+	message := fmt.Sprintf(`It seems your Docker engine might be frozen.
+If there's no progress in the next couple minutes, you may want to try restarting Docker and running the command again.
+Error: %s
+`, err.Error())
+	logOperationFailure(batcheslib.LogEventOperationDockerWatchDog, &batcheslib.DockerWatchDogMetadata{Error: message})
+}
+
 type taskExecutionJSONLines struct {
-	linesTasks map[*executor.Task]batcheslib.JSONLinesTask
+	linesTasks  map[*executor.Task]batcheslib.JSONLinesTask
+	binaryDiffs bool
 }
 
 // seededRand is used in randomID() to generate a "random" number.
@@ -256,7 +269,8 @@ func (ui *taskExecutionJSONLines) StepsExecutionUI(task *executor.Task) executor
 }
 
 type stepsExecutionJSONLines struct {
-	linesTask *batcheslib.JSONLinesTask
+	linesTask   *batcheslib.JSONLinesTask
+	binaryDiffs bool
 }
 
 const stepFlushDuration = 500 * time.Millisecond
@@ -294,7 +308,14 @@ func (ui *stepsExecutionJSONLines) StepPreparingFailed(step int, err error) {
 }
 
 func (ui *stepsExecutionJSONLines) StepStarted(step int, runScript string, env map[string]string) {
-	logOperationStart(batcheslib.LogEventOperationTaskStep, &batcheslib.TaskStepMetadata{TaskID: ui.linesTask.ID, Step: step, Env: env})
+	logOperationStart(
+		batcheslib.LogEventOperationTaskStep,
+		&batcheslib.TaskStepMetadata{
+			Version: version(ui.binaryDiffs),
+			TaskID:  ui.linesTask.ID,
+			Step:    step,
+			Env:     env,
+		})
 }
 
 func (ui *stepsExecutionJSONLines) StepOutputWriter(ctx context.Context, task *executor.Task, step int) executor.StepOutputWriter {
@@ -302,19 +323,21 @@ func (ui *stepsExecutionJSONLines) StepOutputWriter(ctx context.Context, task *e
 		logOperationProgress(
 			batcheslib.LogEventOperationTaskStep,
 			&batcheslib.TaskStepMetadata{
-				TaskID: ui.linesTask.ID,
-				Step:   step,
-				Out:    data,
+				Version: version(ui.binaryDiffs),
+				TaskID:  ui.linesTask.ID,
+				Step:    step,
+				Out:     data,
 			},
 		)
 	}
 	return NewIntervalProcessWriter(ctx, stepFlushDuration, sink)
 }
 
-func (ui *stepsExecutionJSONLines) StepFinished(step int, diff string, changes git.Changes, outputs map[string]interface{}) {
+func (ui *stepsExecutionJSONLines) StepFinished(step int, diff []byte, changes git.Changes, outputs map[string]interface{}) {
 	logOperationSuccess(
 		batcheslib.LogEventOperationTaskStep,
 		&batcheslib.TaskStepMetadata{
+			Version: version(ui.binaryDiffs),
 			TaskID:  ui.linesTask.ID,
 			Step:    step,
 			Diff:    diff,
@@ -327,6 +350,7 @@ func (ui *stepsExecutionJSONLines) StepFailed(step int, err error, exitCode int)
 	logOperationFailure(
 		batcheslib.LogEventOperationTaskStep,
 		&batcheslib.TaskStepMetadata{
+			Version:  version(ui.binaryDiffs),
 			TaskID:   ui.linesTask.ID,
 			Step:     step,
 			Error:    err.Error(),
@@ -369,4 +393,11 @@ func logEvent(e batcheslib.LogEvent) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 	}
+}
+
+func version(binaryDiffs bool) int {
+	if binaryDiffs {
+		return 2
+	}
+	return 1
 }

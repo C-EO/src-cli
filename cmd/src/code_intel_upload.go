@@ -9,12 +9,15 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/pkg/browser"
 
+	"github.com/sourcegraph/sourcegraph/lib/accesstoken"
 	"github.com/sourcegraph/sourcegraph/lib/codeintel/upload"
+	"github.com/sourcegraph/sourcegraph/lib/errors"
 	"github.com/sourcegraph/sourcegraph/lib/output"
 
 	"github.com/sourcegraph/src-cli/internal/api"
@@ -23,23 +26,28 @@ import (
 func init() {
 	usage := `
 Examples:
+  Before running any of these, first use src auth to authenticate.
+  Alternately, use the SRC_ACCESS_TOKEN environment variable for
+  individual src-cli invocations. 
 
-  Upload a SCIP index with explicit repo, commit, and upload files:
+  If run from within the project itself, src-cli will infer various
+  flags based on git metadata.
 
-    	$ src code-intel upload -repo=FOO -commit=BAR -file=index.scip
+        $ src code-intel upload # uploads ./index.scip
+
+  If src-cli is invoked outside the project root, or if you're using
+  a version control system other than git, specify flags explicitly:
+
+    	$ src code-intel upload -root='' -repo=FOO -commit=BAR -file=index.scip
 
   Upload a SCIP index for a subproject:
 
     	$ src code-intel upload -root=cmd/
 
-  Upload a SCIP index when lsifEnforceAuth is enabled:
+  Upload a SCIP index when lsif.enforceAuth is enabled in site settings:
 
     	$ src code-intel upload -github-token=BAZ, or
     	$ src code-intel upload -gitlab-token=BAZ
-
-  Upload an LSIF index when the LSIF indexer does not not declare a tool name.
-
-    	$ src code-intel upload -indexer=lsif-elixir
 
   For any of these commands, an LSIF index (default name: dump.lsif) can be
   used instead of a SCIP index (default name: index.scip).
@@ -70,7 +78,7 @@ Examples:
 func handleCodeIntelUpload(args []string) error {
 	ctx := context.Background()
 
-	out, err := parseAndValidateCodeIntelUploadFlags(args)
+	out, isSCIPAvailable, err := parseAndValidateCodeIntelUploadFlags(args)
 	if !codeintelUploadFlags.json {
 		if out != nil {
 			printInferredArguments(out)
@@ -80,7 +88,7 @@ func handleCodeIntelUpload(args []string) error {
 		}
 	}
 	if err != nil {
-		return handleUploadError(nil, err)
+		return handleUploadError(cfg.AccessToken, err)
 	}
 
 	client := api.NewClient(api.ClientOpts{
@@ -88,9 +96,10 @@ func handleCodeIntelUpload(args []string) error {
 		Flags: codeintelUploadFlags.apiFlags,
 	})
 
-	uploadID, err := upload.UploadIndex(ctx, codeintelUploadFlags.file, client, codeintelUploadOptions(out))
+	uploadOptions := codeintelUploadOptions(out, isSCIPAvailable)
+	uploadID, err := upload.UploadIndex(ctx, codeintelUploadFlags.file, client, uploadOptions)
 	if err != nil {
-		return handleUploadError(out, err)
+		return handleUploadError(uploadOptions.SourcegraphInstanceOptions.AccessToken, err)
 	}
 
 	uploadURL, err := makeCodeIntelUploadURL(uploadID)
@@ -132,10 +141,17 @@ func handleCodeIntelUpload(args []string) error {
 }
 
 // codeintelUploadOptions creates a set of upload options given the values in the flags.
-func codeintelUploadOptions(out *output.Output) upload.UploadOptions {
+func codeintelUploadOptions(out *output.Output, isSCIPAvailable bool) upload.UploadOptions {
 	var associatedIndexID *int
 	if codeintelUploadFlags.associatedIndexID != -1 {
 		associatedIndexID = &codeintelUploadFlags.associatedIndexID
+	}
+
+	cfg.AdditionalHeaders["Content-Type"] = "application/x-ndjson+lsif"
+	path := codeintelUploadFlags.uploadRoute
+	if isSCIPAvailable && filepath.Ext(codeintelUploadFlags.file) == ".scip" {
+		cfg.AdditionalHeaders["Content-Type"] = "application/x-protobuf+scip"
+		path = strings.ReplaceAll(path, "lsif", "scip")
 	}
 
 	logger := upload.NewRequestLogger(
@@ -162,8 +178,9 @@ func codeintelUploadOptions(out *output.Output) upload.UploadOptions {
 			AdditionalHeaders:   cfg.AdditionalHeaders,
 			MaxRetries:          5,
 			RetryInterval:       time.Second,
-			Path:                codeintelUploadFlags.uploadRoute,
+			Path:                path,
 			MaxPayloadSizeBytes: codeintelUploadFlags.maxPayloadSizeMb * 1000 * 1000,
+			MaxConcurrency:      codeintelUploadFlags.maxConcurrency,
 			GitHubToken:         codeintelUploadFlags.gitHubToken,
 			GitLabToken:         codeintelUploadFlags.gitLabToken,
 		},
@@ -219,9 +236,9 @@ func (e errorWithHint) Error() string {
 // given output object is nil then the error will be written to standard out.
 //
 // This method returns the error that should be passed back up to the runner.
-func handleUploadError(out *output.Output, err error) error {
-	if err == upload.ErrUnauthorized {
-		err = filterLSIFUnauthorizedError(out, err)
+func handleUploadError(accessToken string, err error) error {
+	if errors.Is(err, upload.ErrUnauthorized) {
+		err = attachHintsForAuthorizationError(accessToken, err)
 	}
 
 	if codeintelUploadFlags.ignoreUploadFailures {
@@ -233,8 +250,25 @@ func handleUploadError(out *output.Output, err error) error {
 	return err
 }
 
-func filterLSIFUnauthorizedError(out *output.Output, err error) error {
+func attachHintsForAuthorizationError(accessToken string, originalError error) error {
 	var actionableHints []string
+
+	likelyTokenError := accessToken == ""
+	if _, parseErr := accesstoken.ParsePersonalAccessToken(accessToken); accessToken != "" && parseErr != nil {
+		likelyTokenError = true
+		actionableHints = append(actionableHints,
+			"However, the provided access token does not match expected format; was it truncated?",
+			"Typically the access token looks like sgp_<40 hex chars> or sgp_<instance-id>_<40 hex chars>.")
+	}
+
+	if likelyTokenError {
+		return errorWithHint{err: originalError, hint: strings.Join(mergeStringSlices(
+			[]string{"A Sourcegraph access token must be provided via SRC_ACCESS_TOKEN for uploading SCIP/LSIF data."},
+			actionableHints,
+			[]string{"For more details, see https://sourcegraph.com/docs/cli/how-tos/creating_an_access_token."},
+		), "\n")}
+	}
+
 	needsGitHubToken := strings.HasPrefix(codeintelUploadFlags.repo, "github.com")
 	needsGitLabToken := strings.HasPrefix(codeintelUploadFlags.repo, "gitlab.com")
 
@@ -269,8 +303,8 @@ func filterLSIFUnauthorizedError(out *output.Output, err error) error {
 		)
 	}
 
-	return errorWithHint{err: err, hint: strings.Join(mergeStringSlices(
-		[]string{"This Sourcegraph instance has enforced auth for LSIF uploads."},
+	return errorWithHint{err: originalError, hint: strings.Join(mergeStringSlices(
+		[]string{"This Sourcegraph instance has enforced auth for SCIP/LSIF uploads."},
 		actionableHints,
 		[]string{"For more details, see https://docs.sourcegraph.com/cli/references/code-intel/upload."},
 	), "\n")}

@@ -1,9 +1,13 @@
 name: Build and Release
 
 on:
+  workflow_dispatch:
   push:
-    tags:	
+    tags:
       - '*'
+env:
+  GOPRIVATE: "github.com/sourcegraph/*"
+  PRIVATE_TOKEN: "${{ secrets.PRIVATE_SG_ACCESS_TOKEN }}"
 
 # There are two cases where this GitHub action will run:
 #
@@ -47,7 +51,7 @@ jobs:
       second_latest_tag: ${{ env.second_latest_tag }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Set current tag, latest (highest version) tag, and second latest tag
@@ -103,7 +107,7 @@ jobs:
           echo "latest_tag=${{ needs.release_type.outputs.latest_tag }}" >> $GITHUB_ENV
           echo "second_latest_tag=${{ needs.release_type.outputs.second_latest_tag }}" >> $GITHUB_ENV
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Set versioning variables
@@ -116,7 +120,7 @@ jobs:
           echo "Versioned formula file: ${{ env.versioned_formula_file }}"
           echo "Versioned classname: ${{ env.versioned_classname }}"
       - name: Checkout Homebrew tap
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           repository: sourcegraph/homebrew-src-cli
           fetch-depth: 0
@@ -133,7 +137,7 @@ jobs:
           git config user.name sourcegraph-bot
           git config user.email sourcegraph-bot-github@sourcegraph.com
           git add .
-          git commit -m "Copy previous release"
+          git commit --allow-empty -m "Copy previous release"
           git push
 
   # goreleaser runs tests before building, then uses goreleaser to publish to Homebrew and
@@ -171,21 +175,23 @@ jobs:
         run: |
           echo "Goreleaser config file: ${{ env.config_file }}"
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Set up Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v5
         with:
-          go-version: 1.18
-      - run: go get -d -t ./...
-      - run: go test -i ./...
+          go-version: 1.23.2
+      - name: Enable pulling Go modules from private sourcegraph/sourcegraph
+        run: git config --global url."https://${PRIVATE_TOKEN}@github.com/sourcegraph/".insteadOf "https://github.com/sourcegraph/"
+      - run: go test ./...
       - run: go test -race -v ./...
-      - run: echo "${DOCKER_PASSWORD}" | docker login -u=sourcegraphci --password-stdin
+      - run: echo "${DOCKER_PASSWORD}" | docker login -u=$DOCKER_USERNAME --password-stdin
         env:
           DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v2
+        uses: goreleaser/goreleaser-action@v5
         with:
           version: latest
           # We use a different goreleaser config for releasing a new latest version vs.
@@ -193,7 +199,7 @@ jobs:
           # we want to update the main (unversioned) Homebrew formula. For releasing a
           # patch on an older version, we want to publish a new versioned formula and
           # leave the main formula untouched.
-          args: release --rm-dist --config=${{ env.config_file }}
+          args: release --clean --config=${{ env.config_file }}
         env:
           # Use separate access token, because we need a scope:repo token to publish the brew formula.
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
@@ -220,7 +226,7 @@ jobs:
           echo "Old symlink: ${{ env.old_symlink_name }}"
           echo "New symlink: ${{ env.new_symlink_name }}"
       - name: Checkout Homebrew tap
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           repository: sourcegraph/homebrew-src-cli
           fetch-depth: 0
@@ -241,10 +247,10 @@ jobs:
     needs: goreleaser
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v3
+      - uses: actions/setup-node@v4
         with:
           node-version: 16
           registry-url: 'https://registry.npmjs.org'
